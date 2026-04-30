@@ -13,6 +13,9 @@ const logger = require('./utils/logger');
 
 const app = express();
 
+// ─── Trust Proxy (for Render, Heroku, AWS ELB, etc.) ──────────────────────────
+app.set('trust proxy', 1);
+
 // ─── Security Middleware ──────────────────────────────────────────────────────
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
