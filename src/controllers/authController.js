@@ -55,17 +55,15 @@ exports.register = async (req, res, next) => {
 
     const user = await User.create({ name, email, phone, password });
 
-    // Send welcome email
-    try {
-      await sendEmail({
-        to: user.email,
-        subject: 'Welcome to Restaurant App! 🍽️',
-        template: 'welcome',
-        data: { name: user.name },
-      });
-    } catch (emailErr) {
+    // Send welcome email (non-blocking)
+    sendEmail({
+      to: user.email,
+      subject: 'Welcome to Restaurant App! 🍽️',
+      template: 'welcome',
+      data: { name: user.name },
+    }).catch((emailErr) => {
       logger.warn('Welcome email failed:', emailErr.message);
-    }
+    });
 
     sendAuthResponse(user, 201, res);
   } catch (error) {
@@ -183,30 +181,25 @@ exports.forgotPassword = async (req, res, next) => {
     const { email } = req.body;
     const user = await User.findOne({ email });
     if (!user) {
-      // Return success even if user not found (security)
       return res.json({ success: true, message: 'If that email exists, a reset link has been sent.' });
     }
 
     const resetToken = crypto.randomBytes(32).toString('hex');
     user.passwordResetToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-    user.passwordResetExpires = Date.now() + 30 * 60 * 1000; // 30 minutes
+    user.passwordResetExpires = Date.now() + 30 * 60 * 1000;
     await user.save({ validateBeforeSave: false });
 
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
 
-    try {
-      await sendEmail({
-        to: user.email,
-        subject: 'Password Reset Request',
-        template: 'resetPassword',
-        data: { name: user.name, resetUrl },
-      });
-    } catch {
-      user.passwordResetToken = undefined;
-      user.passwordResetExpires = undefined;
-      await user.save({ validateBeforeSave: false });
-      return next(new AppError('Failed to send reset email. Try again later.', 500));
-    }
+    // Send email (non-blocking, no failure crash)
+    sendEmail({
+      to: user.email,
+      subject: 'Password Reset Request',
+      template: 'resetPassword',
+      data: { name: user.name, resetUrl },
+    }).catch((err) => {
+      logger.warn('Reset email failed:', err.message);
+    });
 
     res.json({ success: true, message: 'Reset link sent to your email.' });
   } catch (error) {
