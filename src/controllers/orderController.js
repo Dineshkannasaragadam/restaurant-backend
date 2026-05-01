@@ -32,7 +32,7 @@ exports.createOrder = async (req, res, next) => {
         return next(new AppError(`Product ${item.product} is not available`, 400));
       }
 
-      let price = product.effectivePrice;
+      let price = product.discountPrice || product.price;
       let variant = null;
 
       // Handle variant pricing
@@ -53,7 +53,7 @@ exports.createOrder = async (req, res, next) => {
         price,
         quantity: item.quantity,
         variant,
-        image: product.mainImage?.url,
+        image: product.images?.find((img) => img.isMain)?.url || product.images?.[0]?.url,
         subtotal: itemSubtotal,
       });
     }
@@ -70,7 +70,10 @@ exports.createOrder = async (req, res, next) => {
       deliveryAddress,
       deliveryType,
       pricing: { subtotal, deliveryFee, tax, total },
-      payment: { method: paymentMethod, status: 'pending' },
+      payment: {
+        method: paymentMethod,
+        status: paymentMethod === 'cod' ? 'pending' : 'pending',
+      },
       specialInstructions,
       estimatedDelivery: new Date(Date.now() + 45 * 60 * 1000), // 45 mins
     });
@@ -78,22 +81,27 @@ exports.createOrder = async (req, res, next) => {
     await order.populate('user', 'name email');
 
     // Clear cart after order
-    await Cart.findOneAndUpdate({ user: req.user._id }, { $set: { items: [] } });
+    await Cart.findOneAndUpdate(
+      { user: req.user._id },
+      { $set: { items: [] } }
+    );
 
     // Notify admin via socket
-    emitNewOrder(order);
-
-    // Send confirmation email
     try {
-      sendEmail({
-        to: req.user.email,
-        subject: `Order Confirmed - ${order.orderNumber}`,
-        template: 'orderConfirmation',
-        data: { name: req.user.name, order },
-      });
-    } catch (emailErr) {
-      logger.warn('Order confirmation email failed:', emailErr.message);
+      emitNewOrder(order);
+    } catch (socketErr) {
+      logger.warn('Socket emit failed:', socketErr.message);
     }
+
+    // Send confirmation email — non-blocking, won't crash order
+    sendEmail({
+      to: req.user.email,
+      subject: `Order Confirmed - ${order.orderNumber}`,
+      template: 'orderConfirmation',
+      data: { name: req.user.name, order },
+    }).catch((emailErr) => {
+      logger.warn('Order confirmation email failed:', emailErr.message);
+    });
 
     res.status(201).json({ success: true, order });
   } catch (error) {
@@ -146,7 +154,10 @@ exports.getOrder = async (req, res, next) => {
     if (!order) return next(new AppError('Order not found', 404));
 
     // Users can only see their own orders
-    if (req.user.role !== 'admin' && order.user._id.toString() !== req.user._id.toString()) {
+    if (
+      req.user.role !== 'admin' &&
+      order.user._id.toString() !== req.user._id.toString()
+    ) {
       return next(new AppError('Not authorized to view this order', 403));
     }
 
@@ -165,7 +176,10 @@ exports.updateOrderStatus = async (req, res, next) => {
 
     const validTransitions = {
       pending: ['confirmed', 'cancelled'],
-      confirmed: ['delivered', 'cancelled'],
+      confirmed: ['preparing', 'cancelled'],
+      preparing: ['ready', 'cancelled'],
+      ready: ['out_for_delivery'],
+      out_for_delivery: ['delivered'],
       delivered: [],
       cancelled: [],
     };
@@ -174,11 +188,18 @@ exports.updateOrderStatus = async (req, res, next) => {
     if (!order) return next(new AppError('Order not found', 404));
 
     if (!validTransitions[order.status]?.includes(status)) {
-      return next(new AppError(`Cannot transition from '${order.status}' to '${status}'`, 400));
+      return next(
+        new AppError(`Cannot transition from '${order.status}' to '${status}'`, 400)
+      );
     }
 
     order.status = status;
-    order.statusHistory.push({ status, note, updatedBy: req.user._id, timestamp: new Date() });
+    order.statusHistory.push({
+      status,
+      note,
+      updatedBy: req.user._id,
+      timestamp: new Date(),
+    });
 
     if (status === 'delivered') order.deliveredAt = new Date();
     if (status === 'cancelled') order.cancelledAt = new Date();
@@ -186,21 +207,23 @@ exports.updateOrderStatus = async (req, res, next) => {
     await order.save();
 
     // Real-time update via Socket.io
-    emitOrderUpdate(order);
+    try {
+      emitOrderUpdate(order);
+    } catch (socketErr) {
+      logger.warn('Socket emit failed:', socketErr.message);
+    }
 
-    // Email notification for key statuses
-    const notifyStatuses = ['delivered','confirmed', 'cancelled'];
+    // Email notification — non-blocking
+    const notifyStatuses = ['confirmed', 'preparing', 'out_for_delivery', 'delivered', 'cancelled'];
     if (notifyStatuses.includes(status)) {
-      try {
-        await sendEmail({
-          to: order.user.email,
-          subject: `Order ${order.orderNumber} - Status Update`,
-          template: 'orderStatus',
-          data: { name: order.user.name, order, status },
-        });
-      } catch (emailErr) {
+      sendEmail({
+        to: order.user.email,
+        subject: `Order ${order.orderNumber} - Status Update`,
+        template: 'orderStatus',
+        data: { name: order.user.name, order, status },
+      }).catch((emailErr) => {
         logger.warn('Order status email failed:', emailErr.message);
-      }
+      });
     }
 
     // Update product totalOrders when delivered
@@ -223,7 +246,10 @@ exports.updateOrderStatus = async (req, res, next) => {
  */
 exports.cancelOrder = async (req, res, next) => {
   try {
-    const order = await Order.findOne({ _id: req.params.id, user: req.user._id });
+    const order = await Order.findOne({
+      _id: req.params.id,
+      user: req.user._id,
+    });
     if (!order) return next(new AppError('Order not found', 404));
 
     const cancellableStatuses = ['pending', 'confirmed'];
@@ -242,7 +268,23 @@ exports.cancelOrder = async (req, res, next) => {
     });
 
     await order.save();
-    emitOrderUpdate(order);
+
+    // Real-time update
+    try {
+      emitOrderUpdate(order);
+    } catch (socketErr) {
+      logger.warn('Socket emit failed:', socketErr.message);
+    }
+
+    // Email notification — non-blocking
+    sendEmail({
+      to: req.user.email,
+      subject: `Order ${order.orderNumber} - Cancelled`,
+      template: 'orderStatus',
+      data: { name: req.user.name, order, status: 'cancelled' },
+    }).catch((emailErr) => {
+      logger.warn('Cancel email failed:', emailErr.message);
+    });
 
     res.json({ success: true, message: 'Order cancelled successfully', order });
   } catch (error) {
@@ -256,7 +298,16 @@ exports.cancelOrder = async (req, res, next) => {
 exports.rateOrder = async (req, res, next) => {
   try {
     const { score, review } = req.body;
-    const order = await Order.findOne({ _id: req.params.id, user: req.user._id, status: 'delivered' });
+
+    if (!score || score < 1 || score > 5) {
+      return next(new AppError('Score must be between 1 and 5', 400));
+    }
+
+    const order = await Order.findOne({
+      _id: req.params.id,
+      user: req.user._id,
+      status: 'delivered',
+    });
 
     if (!order) return next(new AppError('Delivered order not found', 404));
     if (order.rating?.score) return next(new AppError('Order already rated', 400));
@@ -264,13 +315,17 @@ exports.rateOrder = async (req, res, next) => {
     order.rating = { score, review, createdAt: new Date() };
     await order.save();
 
-    // Update product ratings (simplified)
+    // Update product ratings
     for (const item of order.items) {
       const product = await Product.findById(item.product);
       if (product) {
         const newCount = product.rating.count + 1;
-        const newAvg = ((product.rating.average * product.rating.count) + score) / newCount;
-        product.rating = { average: Math.round(newAvg * 10) / 10, count: newCount };
+        const newAvg =
+          (product.rating.average * product.rating.count + score) / newCount;
+        product.rating = {
+          average: Math.round(newAvg * 10) / 10,
+          count: newCount,
+        };
         await product.save();
       }
     }
