@@ -176,14 +176,10 @@ exports.updateOrderStatus = async (req, res, next) => {
 
     const validTransitions = {
       pending: ['confirmed', 'cancelled'],
-      confirmed: ['preparing', 'cancelled'],
-      preparing: ['ready', 'cancelled'],
-      ready: ['out_for_delivery'],
-      out_for_delivery: ['delivered'],
+      confirmed: ['delivered', 'cancelled'],
       delivered: [],
       cancelled: [],
     };
-
     const order = await Order.findById(req.params.id).populate('user', 'name email');
     if (!order) return next(new AppError('Order not found', 404));
 
