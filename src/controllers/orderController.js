@@ -85,7 +85,7 @@ exports.createOrder = async (req, res, next) => {
 
     // Send confirmation email
     try {
-      await sendEmail({
+      sendEmail({
         to: req.user.email,
         subject: `Order Confirmed - ${order.orderNumber}`,
         template: 'orderConfirmation',
