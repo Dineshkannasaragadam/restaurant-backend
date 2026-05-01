@@ -12,29 +12,30 @@ const { sendEmail } = require('../services/emailService');
 const logger = require('../utils/logger');
 
 const DELIVERY_FEE = 40;
-const TAX_RATE = 0.05;
+const TAX_RATE = 0.05; // 5% GST
 const FREE_DELIVERY_ABOVE = 500;
 
 /**
- * CREATE ORDER
+ * POST /api/orders - Create new order
  */
 exports.createOrder = async (req, res, next) => {
   try {
-    const { items, deliveryAddress, deliveryType, paymentMethod, specialInstructions } = req.body;
+    const { items, deliveryAddress, deliveryType, paymentMethod, specialInstructions, couponCode } = req.body;
 
+    // Validate and get product details
     const orderItems = [];
     let subtotal = 0;
 
     for (const item of items) {
       const product = await Product.findById(item.product);
-
       if (!product || !product.isActive || !product.isAvailable) {
         return next(new AppError(`Product ${item.product} is not available`, 400));
       }
 
-      let price = product.discountPrice || product.price;
+      let price = product.effectivePrice;
       let variant = null;
 
+      // Handle variant pricing
       if (item.variantId) {
         const v = product.variants.id(item.variantId);
         if (v && v.isAvailable) {
@@ -52,51 +53,47 @@ exports.createOrder = async (req, res, next) => {
         price,
         quantity: item.quantity,
         variant,
-        image: product.images?.find(img => img.isMain)?.url || product.images?.[0]?.url,
+        image: product.mainImage?.url,
         subtotal: itemSubtotal,
       });
     }
 
-    const deliveryFee =
-      deliveryType === 'pickup' || subtotal >= FREE_DELIVERY_ABOVE ? 0 : DELIVERY_FEE;
-
+    // Calculate pricing
+    const deliveryFee = deliveryType === 'pickup' || subtotal >= FREE_DELIVERY_ABOVE ? 0 : DELIVERY_FEE;
     const tax = Math.round(subtotal * TAX_RATE * 100) / 100;
     const total = subtotal + deliveryFee + tax;
 
+    // Create order
     const order = await Order.create({
       user: req.user._id,
       items: orderItems,
       deliveryAddress,
       deliveryType,
       pricing: { subtotal, deliveryFee, tax, total },
-      payment: {
-        method: paymentMethod,
-        status: 'pending',
-      },
+      payment: { method: paymentMethod, status: 'pending' },
       specialInstructions,
-      estimatedDelivery: new Date(Date.now() + 45 * 60 * 1000),
+      estimatedDelivery: new Date(Date.now() + 45 * 60 * 1000), // 45 mins
     });
 
     await order.populate('user', 'name email');
 
+    // Clear cart after order
     await Cart.findOneAndUpdate({ user: req.user._id }, { $set: { items: [] } });
 
-    // Socket safe emit
-    try {
-      emitNewOrder(order);
-    } catch (err) {
-      logger.warn('Socket emit failed:', err.message);
-    }
+    // Notify admin via socket
+    emitNewOrder(order);
 
-    // Non-blocking email
-    sendEmail({
-      to: req.user.email,
-      subject: `Order Confirmed - ${order.orderNumber}`,
-      template: 'orderConfirmation',
-      data: { name: req.user.name, order },
-    }).catch(err => {
-      logger.warn('Email failed:', err.message);
-    });
+    // Send confirmation email
+    try {
+      sendEmail({
+        to: req.user.email,
+        subject: `Order Confirmed - ${order.orderNumber}`,
+        template: 'orderConfirmation',
+        data: { name: req.user.name, order },
+      }).catch(err => {console.log('Email failed:', err.message);});;
+    } catch (emailErr) {
+      logger.warn('Order confirmation email failed:', emailErr.message);
+    }
 
     res.status(201).json({ success: true, order });
   } catch (error) {
@@ -105,7 +102,7 @@ exports.createOrder = async (req, res, next) => {
 };
 
 /**
- * GET MY ORDERS
+ * GET /api/orders/my-orders - Get current user's orders
  */
 exports.getMyOrders = async (req, res, next) => {
   try {
@@ -138,7 +135,7 @@ exports.getMyOrders = async (req, res, next) => {
 };
 
 /**
- * GET SINGLE ORDER
+ * GET /api/orders/:id - Get single order
  */
 exports.getOrder = async (req, res, next) => {
   try {
@@ -148,11 +145,9 @@ exports.getOrder = async (req, res, next) => {
 
     if (!order) return next(new AppError('Order not found', 404));
 
-    if (
-      req.user.role !== 'admin' &&
-      order.user._id.toString() !== req.user._id.toString()
-    ) {
-      return next(new AppError('Not authorized', 403));
+    // Users can only see their own orders
+    if (req.user.role !== 'admin' && order.user._id.toString() !== req.user._id.toString()) {
+      return next(new AppError('Not authorized to view this order', 403));
     }
 
     res.json({ success: true, order });
@@ -162,20 +157,11 @@ exports.getOrder = async (req, res, next) => {
 };
 
 /**
- * UPDATE ORDER STATUS (FIXED 🔥)
+ * PATCH /api/orders/:id/status - Admin: Update order status
  */
 exports.updateOrderStatus = async (req, res, next) => {
   try {
-    let { status, note } = req.body;
-
-    // FIX: normalize input
-    status = status?.toLowerCase().trim();
-
-    const allowedStatuses = ['pending', 'confirmed', 'delivered', 'cancelled'];
-
-    if (!allowedStatuses.includes(status)) {
-      return next(new AppError(`Invalid status '${status}'`, 400));
-    }
+    const { status, note } = req.body;
 
     const validTransitions = {
       pending: ['confirmed', 'cancelled'],
@@ -185,44 +171,38 @@ exports.updateOrderStatus = async (req, res, next) => {
     };
 
     const order = await Order.findById(req.params.id).populate('user', 'name email');
-
     if (!order) return next(new AppError('Order not found', 404));
 
     if (!validTransitions[order.status]?.includes(status)) {
-      return next(
-        new AppError(`Cannot transition from '${order.status}' to '${status}'`, 400)
-      );
+      return next(new AppError(`Cannot transition from '${order.status}' to '${status}'`, 400));
     }
 
     order.status = status;
-
-    order.statusHistory.push({
-      status,
-      note,
-      updatedBy: req.user._id,
-      timestamp: new Date(),
-    });
+    order.statusHistory.push({ status, note, updatedBy: req.user._id, timestamp: new Date() });
 
     if (status === 'delivered') order.deliveredAt = new Date();
     if (status === 'cancelled') order.cancelledAt = new Date();
 
     await order.save();
 
-    try {
-      emitOrderUpdate(order);
-    } catch (err) {
-      logger.warn('Socket emit failed:', err.message);
+    // Real-time update via Socket.io
+    emitOrderUpdate(order);
+
+    // Email notification for key statuses
+    // Email notification for key statuses
+    const notifyStatuses = ['delivered','confirmed', 'cancelled'];
+    if (notifyStatuses.includes(status)) {
+      sendEmail({
+        to: order.user.email,
+        subject: `Order ${order.orderNumber} - Status Update`,
+        template: 'orderStatus',
+        data: { name: order.user.name, order, status },
+      }).catch((emailErr) => {
+        logger.warn('Order status email failed:', emailErr.message);
+      });
     }
 
-    sendEmail({
-      to: order.user.email,
-      subject: `Order ${order.orderNumber} - Status Update`,
-      template: 'orderStatus',
-      data: { name: order.user.name, order, status },
-    }).catch(err => {
-      logger.warn('Email failed:', err.message);
-    });
-
+    // Update product totalOrders when delivered
     if (status === 'delivered') {
       for (const item of order.items) {
         await Product.findByIdAndUpdate(item.product, {
@@ -238,71 +218,63 @@ exports.updateOrderStatus = async (req, res, next) => {
 };
 
 /**
- * CANCEL ORDER
+ * POST /api/orders/:id/cancel - User cancel order
  */
 exports.cancelOrder = async (req, res, next) => {
   try {
-    const order = await Order.findOne({
-      _id: req.params.id,
-      user: req.user._id,
-    });
-
+    const order = await Order.findOne({ _id: req.params.id, user: req.user._id });
     if (!order) return next(new AppError('Order not found', 404));
 
-    if (!['pending', 'confirmed'].includes(order.status)) {
-      return next(new AppError('Cannot cancel at this stage', 400));
+    const cancellableStatuses = ['pending', 'confirmed'];
+    if (!cancellableStatuses.includes(order.status)) {
+      return next(new AppError('Order cannot be cancelled at this stage', 400));
     }
 
     order.status = 'cancelled';
     order.cancelledAt = new Date();
-
-    await order.save();
-
-    try {
-      emitOrderUpdate(order);
-    } catch (err) {
-      logger.warn('Socket emit failed:', err.message);
-    }
-
-    sendEmail({
-      to: req.user.email,
-      subject: `Order ${order.orderNumber} - Cancelled`,
-      template: 'orderStatus',
-      data: { name: req.user.name, order, status: 'cancelled' },
-    }).catch(err => {
-      logger.warn('Email failed:', err.message);
+    order.cancellationReason = req.body.reason || 'Cancelled by user';
+    order.statusHistory.push({
+      status: 'cancelled',
+      note: order.cancellationReason,
+      updatedBy: req.user._id,
+      timestamp: new Date(),
     });
 
-    res.json({ success: true, message: 'Order cancelled', order });
+    await order.save();
+    emitOrderUpdate(order);
+
+    res.json({ success: true, message: 'Order cancelled successfully', order });
   } catch (error) {
     next(error);
   }
 };
 
 /**
- * RATE ORDER
+ * POST /api/orders/:id/rate - Rate delivered order
  */
 exports.rateOrder = async (req, res, next) => {
   try {
     const { score, review } = req.body;
-
-    if (!score || score < 1 || score > 5) {
-      return next(new AppError('Score must be between 1 and 5', 400));
-    }
-
-    const order = await Order.findOne({
-      _id: req.params.id,
-      user: req.user._id,
-      status: 'delivered',
-    });
+    const order = await Order.findOne({ _id: req.params.id, user: req.user._id, status: 'delivered' });
 
     if (!order) return next(new AppError('Delivered order not found', 404));
-    if (order.rating?.score) return next(new AppError('Already rated', 400));
+    if (order.rating?.score) return next(new AppError('Order already rated', 400));
 
     order.rating = { score, review, createdAt: new Date() };
     await order.save();
 
-    res.json({ success: true, message: 'Thanks for rating!' });
+    // Update product ratings (simplified)
+    for (const item of order.items) {
+      const product = await Product.findById(item.product);
+      if (product) {
+        const newCount = product.rating.count + 1;
+        const newAvg = ((product.rating.average * product.rating.count) + score) / newCount;
+        product.rating = { average: Math.round(newAvg * 10) / 10, count: newCount };
+        await product.save();
+      }
+    }
+
+    res.json({ success: true, message: 'Thank you for your rating!' });
   } catch (error) {
     next(error);
   }
