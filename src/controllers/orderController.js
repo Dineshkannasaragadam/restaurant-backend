@@ -83,22 +83,56 @@ exports.createOrder = async (req, res, next) => {
     // Notify admin via socket
     emitNewOrder(order);
 
-    // Send confirmation email
-    try {
-      sendEmail({
-        to: req.user.email,
-        subject: `Order Confirmed - ${order.orderNumber}`,
-        template: 'orderConfirmation',
-        data: { name: req.user.name, order },
-      }).catch(err => {console.log('Email failed:', err.message);});;
-    } catch (emailErr) {
-      logger.warn('Order confirmation email failed:', emailErr.message);
-    }
+  // Send confirmation email to CUSTOMER — non-blocking
+  sendEmail({
+    to: req.user.email,
+    subject: `Order Confirmed - ${order.orderNumber}`,
+    template: 'orderConfirmation',
+    data: { name: req.user.name, order },
+  }).catch((emailErr) => {
+    logger.warn('Order confirmation email failed:', emailErr.message);
+  });
 
-    res.status(201).json({ success: true, order });
+
+
+    // Send notification email to ADMIN — non-blocking
+
+    const adminEmail = process.env.ADMIN_EMAIL || process.env.EMAIL_USER;
+
+    logger.info(`Sending admin notification to: ${adminEmail}`);
+
+    sendEmail({
+
+      to: adminEmail,
+
+      subject: `🛵 New Order - ${order.orderNumber}`,
+
+      template: 'newOrderAdmin',
+
+      data: { order, user: req.user },
+
+    }).catch((emailErr) => {
+
+      logger.warn('Admin notification email failed:', emailErr.message);
+
+    });
+
+    // ✅ FIXED: response + closing bracket
+
+    res.status(201).json({
+
+      success: true,
+
+      order,
+
+    });
+
   } catch (error) {
+
     next(error);
+
   }
+
 };
 
 /**
