@@ -22,6 +22,9 @@ const createTransporter = () =>
     tls: {
       rejectUnauthorized: false,
     },
+    debug: true,
+
+    logger: true,
   });
 
 // ─── Email Templates ──────────────────────────────────────────────────────────
@@ -372,6 +375,9 @@ const sendEmail = async ({ to, subject, template, data, html }) => {
     }
 
     const transporter = createTransporter();
+    await transporter.verify();
+
+    console.log("SMTP VERIFIED");
 
     const info = await transporter.sendMail({
       from: process.env.EMAIL_FROM,
@@ -383,8 +389,7 @@ const sendEmail = async ({ to, subject, template, data, html }) => {
     logger.info(`Email sent to ${to}: ${info.messageId}`);
     return info;
   } catch (error) {
-    // Never crash the app — just log
-    logger.warn(`Email failed silently: ${error.message}`);
+    console.error("FULL EMAIL ERROR:", error);
     return null;
   }
 };
