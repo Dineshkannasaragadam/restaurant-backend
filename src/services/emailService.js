@@ -32,7 +32,7 @@ const createTransporter = () => {
   console.log('Email Host:', config.host);
   console.log('Email Port:', config.port);
   console.log('Email User:', config.auth.user);
-  console.log('Email Pass:', config.auth.pass ? '***[SET]***' : '***[NOT SET]***');
+  console.log('Email Pass:', config.auth.pass );
   console.log('Frontend URL:', process.env.FRONTEND_URL);
   console.log('Admin Email:', process.env.ADMIN_EMAIL);
   console.log('Email From:', process.env.EMAIL_FROM);
@@ -389,8 +389,9 @@ const sendEmail = async ({ to, subject, template, data, html }) => {
       const rendered = templates[template](data || {});
       emailContent = rendered;
     }
-
+    console.log("before transporter");
     const transporter = createTransporter();
+    console.log("Transporter created");
     await transporter.verify();
     console.log("SMTP VERIFIED");
 
