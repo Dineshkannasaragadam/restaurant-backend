@@ -1,4 +1,4 @@
- /**
+/**
  * Email Service using Brevo SMTP
  * 300 free emails per day — works on Render
  */
@@ -7,8 +7,8 @@ const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 
 // Create Brevo transporter
-const createTransporter = () =>
-  nodemailer.createTransport({
+const createTransporter = () => {
+  const config = {
     host: process.env.EMAIL_HOST || 'smtp-relay.brevo.com',
     port: parseInt(process.env.EMAIL_PORT) || 587,
     secure: false,
@@ -25,7 +25,22 @@ const createTransporter = () =>
 
     debug : true,
     logger:true,
-  });
+  };
+
+  // Console log email configuration
+  console.log('====== EMAIL SERVICE CONFIGURATION ======');
+  console.log('Email Host:', config.host);
+  console.log('Email Port:', config.port);
+  console.log('Email User:', config.auth.user);
+  console.log('Email Pass:', config.auth.pass ? '***[SET]***' : '***[NOT SET]***');
+  console.log('Frontend URL:', process.env.FRONTEND_URL);
+  console.log('Admin Email:', process.env.ADMIN_EMAIL);
+  console.log('Email From:', process.env.EMAIL_FROM);
+  console.log('Node Environment:', process.env.NODE_ENV);
+  console.log('========================================');
+
+  return nodemailer.createTransport(config);
+};
 
 // ─── Email Templates ──────────────────────────────────────────────────────────
 const templates = {
@@ -367,6 +382,7 @@ const templates = {
 // ─── Main Send Function ───────────────────────────────────────────────────────
 const sendEmail = async ({ to, subject, template, data, html }) => {
   try {
+    console.log("I'm inside the function");
     let emailContent = { subject, html: html || '' };
 
     if (template && templates[template]) {
