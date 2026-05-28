@@ -1,46 +1,12 @@
 /**
- * Email Service using Brevo SMTP
- * 300 free emails per day — works on Render
+ * Email Service using Brevo REST API
+ * 300 free emails per day — works on Render, Vercel, etc.
  */
 
-const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
+const { sendEmailViaAPI } = require('./brevoApi');
 
-// Create Brevo transporter
-const createTransporter = () => {
-  const config = {
-    host: process.env.EMAIL_HOST || 'smtp-relay.brevo.com',
-    port: parseInt(process.env.EMAIL_PORT) || 465,
-    secure: false,
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000,
-    tls: {
-      rejectUnauthorized: false,
-    },
-
-    debug : true,
-    logger:true,
-  };
-
-  // Console log email configuration
-  console.log('====== EMAIL SERVICE CONFIGURATION ======');
-  console.log('Email Host:', config.host);
-  console.log('Email Port:', config.port);
-  console.log('Email User:', config.auth.user);
-  console.log('Email Pass:', config.auth.pass );
-  console.log('Frontend URL:', process.env.FRONTEND_URL);
-  console.log('Admin Email:', process.env.ADMIN_EMAIL);
-  console.log('Email From:', process.env.EMAIL_FROM);
-  console.log('Node Environment:', process.env.NODE_ENV);
-  console.log('========================================');
-
-  return nodemailer.createTransport(config);
-};
+// Brevo API is now used via brevoApi.js
 
 // ─── Email Templates ──────────────────────────────────────────────────────────
 const templates = {
@@ -382,33 +348,27 @@ const templates = {
 // ─── Main Send Function ───────────────────────────────────────────────────────
 const sendEmail = async ({ to, subject, template, data, html }) => {
   try {
-    console.log("I'm inside the function");
     let emailContent = { subject, html: html || '' };
 
     if (template && templates[template]) {
       const rendered = templates[template](data || {});
       emailContent = rendered;
     }
-    console.log("before transporter");
-    const transporter = createTransporter();
-    console.log("Transporter created");
-    await transporter.verify();
-    console.log("SMTP VERIFIED");
 
-    const info = await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
+    // Use Brevo REST API instead of SMTP
+    const info = await sendEmailViaAPI({
       to,
       subject: emailContent.subject,
       html: emailContent.html,
     });
 
-    logger.info(`Email sent to ${to}: ${info.messageId}`);
     return info;
-} catch (error) {
-  console.error("FULL EMAIL ERROR:", error);
-  return null;
-}
+  } catch (error) {
+    console.error("FULL EMAIL ERROR:", error);
+    return null;
+  }
 };
 
 module.exports = { sendEmail };
+
 
