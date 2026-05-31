@@ -28,7 +28,7 @@ const sendEmailViaAPI = async ({ to, subject, html }) => {
     
     const sender = {
       email: process.env.EMAIL_FROM || 'saragadamdinesh1973@gmail.com',
-      name: 'Savori Restaurant'
+      name: 'Athidhi Restaurant'
     };
 
     const receivers = [{ email: to }];

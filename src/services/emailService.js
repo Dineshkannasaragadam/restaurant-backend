@@ -12,7 +12,7 @@ const { sendEmailViaAPI } = require('./brevoApi');
 const templates = {
 
   welcome: ({ name }) => ({
-    subject: 'Welcome to Savori! 🍽️',
+    subject: 'Welcome to Athidhi! 🍽️',
     html: `
       <div style="font-family: 'Segoe UI', sans-serif; max-width: 600px; 
                   margin: auto; background: #fff;">
@@ -36,7 +36,7 @@ const templates = {
         </div>
         <div style="background: #f9f9f9; padding: 20px; text-align: center; 
                     color: #999; font-size: 13px;">
-          © ${new Date().getFullYear()} Savori Restaurant
+          © ${new Date().getFullYear()} Athidhi Restaurant
         </div>
       </div>
     `,
@@ -97,7 +97,7 @@ const templates = {
         </div>
         <div style="background: #f9f9f9; padding: 20px; text-align: center; 
                     color: #999; font-size: 13px;">
-          © ${new Date().getFullYear()} Savori Restaurant
+          © ${new Date().getFullYear()} Athidhi Restaurant
         </div>
       </div>
     `,
@@ -338,7 +338,7 @@ const templates = {
         </div>
         <div style="background: #f9f9f9; padding: 20px; text-align: center; 
                     color: #999; font-size: 13px;">
-          © ${new Date().getFullYear()} Savori Restaurant Admin
+          © ${new Date().getFullYear()} Athidhi Restaurant Admin
         </div>
       </div>
     `,
