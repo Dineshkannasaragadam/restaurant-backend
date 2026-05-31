@@ -75,7 +75,7 @@ exports.createOrder = async (req, res, next) => {
       estimatedDelivery: new Date(Date.now() + 45 * 60 * 1000), // 45 mins
     });
 
-    await order.populate('user', 'name email');
+    await order.populate('user', 'name email phone');
 
     // Clear cart after order
     await Cart.findOneAndUpdate({ user: req.user._id }, { $set: { items: [] } });
@@ -83,38 +83,28 @@ exports.createOrder = async (req, res, next) => {
     // Notify admin via socket
     emitNewOrder(order);
 
-  // Send confirmation email to CUSTOMER — non-blocking
-  sendEmail({
-    to: req.user.email,
-    subject: `Order Confirmed - ${order.orderNumber}`,
-    template: 'orderConfirmation',
-    data: { name: req.user.name, order },
-  }).catch((emailErr) => {
-    logger.warn('Order confirmation email failed:', emailErr.message);
-  });
-
-
+    // Send confirmation email to CUSTOMER — non-blocking
+    sendEmail({
+      to: order.user.email,
+      subject: `Order Confirmed - ${order.orderNumber}`,
+      template: 'orderConfirmation',
+      data: { name: order.user.name, order },
+    }).catch((emailErr) => {
+      logger.warn('Order confirmation email failed:', emailErr.message);
+    });
 
     // Send notification email to ADMIN — non-blocking
-
     const adminEmail = process.env.ADMIN_EMAIL || process.env.EMAIL_USER;
 
     logger.info(`Sending admin notification to: ${adminEmail}`);
 
     sendEmail({
-
       to: adminEmail,
-
       subject: `🛵 New Order - ${order.orderNumber}`,
-
       template: 'newOrderAdmin',
-
-      data: { order, user: req.user },
-
+      data: { order, user: order.user },
     }).catch((emailErr) => {
-
       logger.warn('Admin notification email failed:', emailErr.message);
-
     });
 
     // ✅ FIXED: response + closing bracket
